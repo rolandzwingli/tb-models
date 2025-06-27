@@ -1,0 +1,920 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Weather Landscape</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            background: white;
+        }
+        
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 100;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            max-width: 300px;
+        }
+        
+        #time-control {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 100;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            width: 250px;
+        }
+        
+        .control-group {
+            margin-bottom: 15px;
+        }
+        
+        .control-group label {
+            display: block;
+            font-size: 14px;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: bold;
+        }
+        
+        .control-group input[type="range"] {
+            width: 100%;
+            height: 24px;
+        }
+        
+        .control-group input[type="checkbox"] {
+            margin-right: 8px;
+        }
+        
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 200;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        
+        .weather-info {
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+        
+        .time-display {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 15px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <!-- Loading Screen -->
+        <div id="loading">
+            <h3>Landschaft wird geladen...</h3>
+            <div>Bitte warten...</div>
+        </div>
+        
+        <!-- UI Overlay -->
+        <div id="ui-overlay">
+            <div id="sun-info" style="margin-bottom: 15px; font-size: 12px; color: #666;"></div>
+            <div class="weather-info">
+                <strong>Wetter:</strong> <span id="weather-status">Laden...</span>
+            </div>
+            <div class="weather-info">
+                <strong>Temperatur:</strong> <span id="temperature">--°C</span>
+            </div>
+        </div>
+        
+        <!-- Time Control Panel -->
+        <div id="time-control">
+            <div class="time-display" id="current-time">12:00</div>
+            
+            <div class="control-group">
+                <label>
+                    <input type="checkbox" id="liveMode" checked> Live-Zeit verwenden
+                </label>
+            </div>
+            
+            <div class="control-group">
+                <label>Tageszeit: <span id="timeValue">12.0</span> Uhr</label>
+                <input type="range" id="timeSlider" min="0" max="24" step="0.5" value="12">
+            </div>
+        </div>
+    </div>
+
+    <!-- Three.js from CDN -->
+    <script src="https://unpkg.com/three@0.128.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/EffectComposer.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/RenderPass.js"></script>
+    <script src="https://unpkg.com/three@0.128.0/examples/js/postprocessing/ShaderPass.js"></script>
+
+    <script>
+        console.log('🚀 Weather Landscape wird geladen...');
+        
+        class WeatherLandscape {
+            constructor() {
+                console.log('🏗️ WeatherLandscape initialisiert...');
+                
+                // Core Three.js objects
+                this.scene = null;
+                this.camera = null;
+                this.renderer = null;
+                this.loader = null;
+                this.landscapeModel = null;
+                this.particleSystem = null;
+                
+                // Lighting
+                this.sunLight = null;
+                this.ambientLight = null;
+                this.fillLight = null;
+                
+                // Animation System
+                this.animatedModels = new Map();
+                this.mixers = [];
+                this.clock = new THREE.Clock();
+                
+                // Post-Processing
+                this.composer = null;
+                this.colorCorrectionPass = null;
+                
+                // Location: Aargauerstrasse 182, Zürich
+                this.location = {
+                    lat: 47.392898,
+                    lng: 8.4934183,
+                    name: "Aargauerstrasse 182, Zürich"
+                };
+                
+                // Time controls
+                this.timeControls = {
+                    liveMode: true,
+                    manualTime: 12
+                };
+                
+                // Fixed lighting settings (hardcoded)
+                this.lightingConfig = {
+                    sunOffset: 140,
+                    sunIntensityMultiplier: 0.2,
+                    ambientIntensity: 0.4,
+                    fillIntensity: 1.0,
+                    shadowBias: -0.00004,
+                    shadowResolution: 8192
+                };
+                
+                // Fixed post-processing settings (hardcoded)
+                this.postProcessConfig = {
+                    saturation: 1.4,
+                    contrast: 1.2,
+                    brightness: 0.0
+                };
+                
+                // Sun data
+                this.sunData = {
+                    sunrise: null,
+                    sunset: null,
+                    solar_noon: null,
+                    current_time: new Date(),
+                    is_daytime: true
+                };
+                
+                // Weather data
+                this.weatherData = {
+                    condition: 'sunny',
+                    temperature: 20,
+                    precipitation: 0
+                };
+                
+                this.init();
+                this.setupTimeControls();
+                this.loadSunData().then(() => {
+                    this.animate();
+                    this.startDataUpdates();
+                });
+            }
+            
+            hideLoadingScreen() {
+                const loadingDiv = document.getElementById('loading');
+                if (loadingDiv) {
+                    loadingDiv.style.display = 'none';
+                    console.log('🎭 Loading Screen versteckt');
+                }
+            }
+            
+            init() {
+                console.log('🔧 Initialisiere Three.js Scene...');
+                
+                // Create scene
+                this.scene = new THREE.Scene();
+                this.scene.background = new THREE.Color(0xffffff);
+                
+                // Create isometric camera
+                const aspect = window.innerWidth / window.innerHeight;
+                const frustumSize = 10;
+                this.camera = new THREE.OrthographicCamera(
+                    frustumSize * aspect / -2, frustumSize * aspect / 2,
+                    frustumSize / 2, frustumSize / -2,
+                    0.01, 100
+                );
+                
+                const distance = 20;
+                const phi = (90 - 30) * Math.PI / 180;
+                const theta = 45 * Math.PI / 180;
+                
+                this.camera.position.set(
+                    distance * Math.sin(phi) * Math.cos(theta),
+                    distance * Math.cos(phi),
+                    distance * Math.sin(phi) * Math.sin(theta)
+                );
+                
+                this.camera.lookAt(0, 0, 0);
+                this.camera.up.set(0, 1, 0);
+                
+                // Create renderer
+                this.renderer = new THREE.WebGLRenderer({ 
+                    antialias: true,
+                    powerPreference: "high-performance",
+                    logarithmicDepthBuffer: true
+                });
+                
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.setPixelRatio(Math.min(window.devicePixelRatio * 1.25, 3.0));
+                
+                // Shadow settings (hardcoded)
+                this.renderer.shadowMap.enabled = true;
+                this.renderer.shadowMap.type = THREE.BasicShadowMap;
+                this.renderer.shadowMap.autoUpdate = true;
+                
+                this.renderer.outputEncoding = THREE.sRGBEncoding;
+                this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+                this.renderer.toneMappingExposure = 1.0;
+                this.renderer.sortObjects = true;
+                
+                document.getElementById('container').appendChild(this.renderer.domElement);
+                
+                this.setupLighting();
+                this.loader = new THREE.GLTFLoader();
+                this.createParticleSystem();
+                this.setupPostProcessing();
+                this.setupEventListeners();
+                
+                this.hideLoadingScreen();
+                console.log('✅ Initialisierung abgeschlossen!');
+            }
+            
+            setupLighting() {
+                // Ambient Light (hardcoded)
+                this.ambientLight = new THREE.AmbientLight(0xffffff, this.lightingConfig.ambientIntensity);
+                this.scene.add(this.ambientLight);
+                
+                // Sun Light (hardcoded)
+                this.sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
+                this.sunLight.castShadow = true;
+                
+                this.sunLight.shadow.mapSize.width = this.lightingConfig.shadowResolution;
+                this.sunLight.shadow.mapSize.height = this.lightingConfig.shadowResolution;
+                
+                this.sunLight.shadow.camera.near = 0.1;
+                this.sunLight.shadow.camera.far = 500;
+                this.sunLight.shadow.camera.left = -30;
+                this.sunLight.shadow.camera.right = 30;
+                this.sunLight.shadow.camera.top = 30;
+                this.sunLight.shadow.camera.bottom = -30;
+                
+                this.sunLight.shadow.bias = this.lightingConfig.shadowBias;
+                this.sunLight.shadow.normalBias = 0;
+                
+                this.scene.add(this.sunLight);
+                
+                // Fill Light (hardcoded)
+                this.fillLight = new THREE.DirectionalLight(0xffffff, this.lightingConfig.fillIntensity);
+                this.fillLight.castShadow = false;
+                
+                const cameraDirection = new THREE.Vector3();
+                this.camera.getWorldDirection(cameraDirection);
+                cameraDirection.multiplyScalar(-1);
+                this.fillLight.position.copy(cameraDirection).multiplyScalar(50);
+                
+                this.scene.add(this.fillLight);
+                
+                this.updateSunPosition();
+                console.log('💡 Beleuchtung eingerichtet (hardcoded)');
+            }
+            
+            createParticleSystem() {
+                const particleCount = 1000;
+                const geometry = new THREE.BufferGeometry();
+                const positions = new Float32Array(particleCount * 3);
+                const velocities = new Float32Array(particleCount * 3);
+                
+                for (let i = 0; i < particleCount; i++) {
+                    positions[i * 3] = (Math.random() - 0.5) * 20;
+                    positions[i * 3 + 1] = Math.random() * 20;
+                    positions[i * 3 + 2] = (Math.random() - 0.5) * 20;
+                    
+                    velocities[i * 3] = 0;
+                    velocities[i * 3 + 1] = -Math.random() * 0.1 - 0.05;
+                    velocities[i * 3 + 2] = 0;
+                }
+                
+                geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+                geometry.setAttribute('velocity', new THREE.BufferAttribute(velocities, 3));
+                
+                const material = new THREE.PointsMaterial({
+                    color: 0x87CEEB,
+                    size: 0.1,
+                    transparent: true,
+                    opacity: 0.6
+                });
+                
+                this.particleSystem = new THREE.Points(geometry, material);
+                this.particleSystem.visible = false;
+                this.scene.add(this.particleSystem);
+            }
+            
+            setupPostProcessing() {
+                this.composer = new THREE.EffectComposer(this.renderer);
+                
+                const renderPass = new THREE.RenderPass(this.scene, this.camera);
+                this.composer.addPass(renderPass);
+                
+                // Color Correction Shader (hardcoded values)
+                const ColorCorrectionShader = {
+                    uniforms: {
+                        'tDiffuse': { value: null },
+                        'saturation': { value: this.postProcessConfig.saturation },
+                        'contrast': { value: this.postProcessConfig.contrast },
+                        'brightness': { value: this.postProcessConfig.brightness }
+                    },
+                    
+                    vertexShader: [
+                        'varying vec2 vUv;',
+                        'void main() {',
+                        '    vUv = uv;',
+                        '    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+                        '}'
+                    ].join('\n'),
+                    
+                    fragmentShader: [
+                        'uniform sampler2D tDiffuse;',
+                        'uniform float saturation;',
+                        'uniform float contrast;',
+                        'uniform float brightness;',
+                        'varying vec2 vUv;',
+                        '',
+                        'void main() {',
+                        '    vec4 color = texture2D(tDiffuse, vUv);',
+                        '    ',
+                        '    // Brightness',
+                        '    color.rgb += brightness;',
+                        '    ',
+                        '    // Contrast',
+                        '    color.rgb = (color.rgb - 0.5) * contrast + 0.5;',
+                        '    ',
+                        '    // Saturation',
+                        '    float gray = dot(color.rgb, vec3(0.299, 0.587, 0.114));',
+                        '    color.rgb = mix(vec3(gray), color.rgb, saturation);',
+                        '    ',
+                        '    gl_FragColor = color;',
+                        '}'
+                    ].join('\n')
+                };
+                
+                this.colorCorrectionPass = new THREE.ShaderPass(ColorCorrectionShader);
+                this.colorCorrectionPass.renderToScreen = true;
+                this.composer.addPass(this.colorCorrectionPass);
+                
+                console.log('🎨 Post-Processing eingerichtet (hardcoded)');
+            }
+            
+            setupTimeControls() {
+                const liveModeCheckbox = document.getElementById('liveMode');
+                const timeSlider = document.getElementById('timeSlider');
+                const timeValue = document.getElementById('timeValue');
+                
+                liveModeCheckbox.addEventListener('change', (e) => {
+                    this.timeControls.liveMode = e.target.checked;
+                    this.updateSunPosition();
+                    this.updateTimeDisplay();
+                });
+                
+                timeSlider.addEventListener('input', (e) => {
+                    this.timeControls.manualTime = parseFloat(e.target.value);
+                    timeValue.textContent = this.timeControls.manualTime.toFixed(1);
+                    if (!this.timeControls.liveMode) {
+                        this.updateSunPosition();
+                    }
+                    this.updateTimeDisplay();
+                });
+                
+                this.updateTimeDisplay();
+                console.log('🎛️ Zeit-Steuerung eingerichtet');
+            }
+            
+            updateTimeDisplay() {
+                let currentTime;
+                if (this.timeControls.liveMode) {
+                    currentTime = new Date();
+                } else {
+                    const today = new Date();
+                    currentTime = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                    currentTime.setHours(Math.floor(this.timeControls.manualTime));
+                    currentTime.setMinutes((this.timeControls.manualTime % 1) * 60);
+                }
+                
+                const timeDisplay = document.getElementById('current-time');
+                timeDisplay.textContent = currentTime.toLocaleTimeString('de-CH', {
+                    hour: '2-digit',
+                    minute: '2-digit'
+                });
+            }
+            
+            async loadSunData() {
+                try {
+                    console.log('🔍 Lade Sonnendaten...');
+                    const today = new Date().toISOString().split('T')[0];
+                    const url = `https://api.sunrise-sunset.org/json?lat=${this.location.lat}&lng=${this.location.lng}&date=${today}&formatted=0`;
+                    
+                    const response = await fetch(url);
+                    const data = await response.json();
+                    
+                    if (data.status === 'OK' && data.results) {
+                        this.sunData.sunrise = new Date(data.results.sunrise);
+                        this.sunData.sunset = new Date(data.results.sunset);
+                        this.sunData.solar_noon = new Date(data.results.solar_noon);
+                        
+                        console.log('☀️ Sonnendaten geladen');
+                        this.updateSunPosition();
+                        this.updateUI();
+                    } else {
+                        throw new Error('API Status nicht OK');
+                    }
+                } catch (error) {
+                    console.error('❌ Fehler beim Laden der Sonnendaten:', error);
+                    // Fallback values
+                    const now = new Date();
+                    this.sunData.sunrise = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 6, 30);
+                    this.sunData.sunset = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 20, 30);
+                    this.sunData.solar_noon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 13, 30);
+                    
+                    this.updateSunPosition();
+                    this.updateUI();
+                }
+                
+                this.loadWeatherData();
+            }
+            
+            async loadWeatherData() {
+                try {
+                    console.log('🌤️ Lade Wetterdaten...');
+                    const response = await fetch('https://wttr.in/Zurich?format=j1');
+                    const data = await response.json();
+                    
+                    if (data.current_condition && data.current_condition[0]) {
+                        const current = data.current_condition[0];
+                        const temperature = parseInt(current.temp_C);
+                        const weatherDesc = current.weatherDesc[0].value.toLowerCase();
+                        
+                        let condition = 'sunny';
+                        if (weatherDesc.includes('rain')) condition = 'rain';
+                        else if (weatherDesc.includes('snow')) condition = 'snow';
+                        else if (weatherDesc.includes('cloud') || weatherDesc.includes('overcast')) condition = 'cloudy';
+                        
+                        this.updateWeather(condition, temperature, 0);
+                    }
+                } catch (error) {
+                    console.error('❌ Fehler beim Laden der Wetterdaten:', error);
+                    this.updateWeather('sunny', 18, 0);
+                }
+            }
+            
+            updateSunPosition() {
+                let currentTime;
+                if (this.timeControls.liveMode) {
+                    currentTime = new Date();
+                } else {
+                    const today = new Date();
+                    currentTime = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+                    currentTime.setHours(Math.floor(this.timeControls.manualTime));
+                    currentTime.setMinutes((this.timeControls.manualTime % 1) * 60);
+                }
+                
+                this.sunData.current_time = currentTime;
+                
+                if (!this.sunData.sunrise || !this.sunData.sunset) {
+                    this.setSunPosition(50, 60, 25, 2.0, 0xffffff);
+                    this.sunData.is_daytime = true;
+                    this.scene.background.setHex(0xFFFFFF);
+                    return;
+                }
+                
+                const sunrise = this.sunData.sunrise.getTime();
+                const sunset = this.sunData.sunset.getTime();
+                const solar_noon = this.sunData.solar_noon.getTime();
+                const current = currentTime.getTime();
+                
+                this.sunData.is_daytime = current >= sunrise && current <= sunset;
+                
+                if (this.sunData.is_daytime) {
+                    const dayProgress = (current - sunrise) / (sunset - sunrise);
+                    const noonProgress = (current - sunrise) / (solar_noon - sunrise);
+                    
+                    let elevation;
+                    if (current <= solar_noon) {
+                        elevation = (20 + noonProgress * 70) * Math.PI / 180;
+                    } else {
+                        const afternoonProgress = (current - solar_noon) / (sunset - solar_noon);
+                        elevation = (90 - afternoonProgress * 70) * Math.PI / 180;
+                    }
+                    
+                    const baseAzimuth = (90 + dayProgress * 180) * Math.PI / 180;
+                    const azimuthWithOffset = baseAzimuth + (this.lightingConfig.sunOffset * Math.PI / 180);
+                    
+                    const distance = 70;
+                    const x = distance * Math.cos(elevation) * Math.cos(azimuthWithOffset);
+                    const y = distance * Math.sin(elevation);
+                    const z = distance * Math.cos(elevation) * Math.sin(azimuthWithOffset);
+                    
+                    const minIntensity = 1.2;
+                    const maxIntensity = 2.5;
+                    const baseIntensity = minIntensity + Math.sin(elevation) * (maxIntensity - minIntensity);
+                    const finalIntensity = baseIntensity * this.lightingConfig.sunIntensityMultiplier;
+                    
+                    let sunColor;
+                    if (dayProgress < 0.1 || dayProgress > 0.9) {
+                        sunColor = 0xFFBB88;
+                    } else if (dayProgress < 0.3 || dayProgress > 0.7) {
+                        sunColor = 0xFFDD99;
+                    } else {
+                        sunColor = 0xFFFFFF;
+                    }
+                    
+                    this.setSunPosition(x, y, z, finalIntensity, sunColor);
+                    this.scene.background.setHex(0xFFFFFF);
+                } else {
+                    const nightIntensity = 1.0 * this.lightingConfig.sunIntensityMultiplier;
+                    this.setSunPosition(0, 40, 60, nightIntensity, 0xDDDDFF);
+                    this.scene.background.setHex(0xFAFAFA);
+                }
+            }
+            
+            setSunPosition(x, y, z, intensity, color) {
+                this.sunLight.position.set(x, y, z);
+                this.sunLight.intensity = intensity;
+                this.sunLight.color.setHex(color);
+                
+                if (this.sunLight.shadow && this.sunLight.shadow.camera) {
+                    this.sunLight.target.position.set(0, 0, 0);
+                    this.sunLight.target.updateMatrixWorld();
+                    this.sunLight.shadow.camera.updateProjectionMatrix();
+                }
+            }
+            
+            updateUI() {
+                if (this.sunData.sunrise && this.sunData.sunset) {
+                    const sunriseTime = this.sunData.sunrise.toLocaleTimeString('de-CH', {hour: '2-digit', minute: '2-digit'});
+                    const sunsetTime = this.sunData.sunset.toLocaleTimeString('de-CH', {hour: '2-digit', minute: '2-digit'});
+                    const currentTime = this.sunData.current_time.toLocaleTimeString('de-CH', {hour: '2-digit', minute: '2-digit'});
+                    
+                    const sunInfo = document.getElementById('sun-info');
+                    const dayNightStatus = this.sunData.is_daytime ? '☀️ Tag' : '🌙 Nacht';
+                    sunInfo.innerHTML = `<strong>${this.location.name}</strong><br>` +
+                        `<strong>${currentTime}</strong> - ${dayNightStatus}<br>` +
+                        `🌅 ${sunriseTime} | 🌇 ${sunsetTime}`;
+                }
+            }
+            
+            loadGLTFModel(url) {
+                console.log('🏔️ Lade Landschaft GLTF:', url);
+                
+                this.loader.load(
+                    url,
+                    (gltf) => {
+                        console.log('✅ GLTF erfolgreich geladen');
+                        
+                        if (this.landscapeModel) {
+                            this.scene.remove(this.landscapeModel);
+                        }
+                        
+                        this.landscapeModel = gltf.scene;
+                        
+                        this.landscapeModel.traverse((child) => {
+                            if (child.isMesh) {
+                                const hasVertexColors = child.geometry.attributes.color;
+                                const originalColor = child.material.color ? child.material.color.clone() : new THREE.Color(0xffffff);
+                                const originalMap = child.material.map;
+                                
+                                const newMaterial = new THREE.MeshPhongMaterial({
+                                    color: originalColor,
+                                    vertexColors: hasVertexColors ? true : false,
+                                    side: THREE.DoubleSide,
+                                    specular: new THREE.Color(0x333333),
+                                    shininess: 10,
+                                    flatShading: false,
+                                    depthTest: true,
+                                    depthWrite: true
+                                });
+                                
+                                if (originalMap) {
+                                    newMaterial.map = originalMap;
+                                }
+                                
+                                child.material = newMaterial;
+                                child.castShadow = true;
+                                child.receiveShadow = true;
+                            }
+                        });
+                        
+                        this.scene.add(this.landscapeModel);
+                        console.log('✅ GLTF Model geladen');
+                    },
+                    (progress) => {
+                        console.log('⏳ Loading progress: ' + Math.round((progress.loaded / progress.total) * 100) + '%');
+                    },
+                    (error) => {
+                        console.error('❌ Error loading GLTF:', error);
+                    }
+                );
+            }
+            
+            loadAnimatedGLTF(url, name, options = {}) {
+                const config = {
+                    loopDuration: 30000,
+                    autoPlay: true,
+                    ...options
+                };
+                
+                console.log('🚗 Lade animiertes GLTF:', name);
+                
+                this.loader.load(
+                    url,
+                    (gltf) => {
+                        console.log('✅ Animiertes GLTF geladen:', name);
+                        
+                        const model = gltf.scene;
+                        
+                        model.traverse((child) => {
+                            if (child.isMesh) {
+                                const hasVertexColors = child.geometry.attributes.color;
+                                const originalColor = child.material.color ? child.material.color.clone() : new THREE.Color(0xffffff);
+                                const originalMap = child.material.map;
+                                
+                                const newMaterial = new THREE.MeshPhongMaterial({
+                                    color: originalColor,
+                                    vertexColors: hasVertexColors ? true : false,
+                                    side: THREE.DoubleSide,
+                                    specular: new THREE.Color(0x333333),
+                                    shininess: 10,
+                                    flatShading: false,
+                                    depthTest: true,
+                                    depthWrite: true
+                                });
+                                
+                                if (originalMap) {
+                                    newMaterial.map = originalMap;
+                                }
+                                
+                                child.material = newMaterial;
+                                child.castShadow = true;
+                                child.receiveShadow = true;
+                            }
+                        });
+                        
+                        if (gltf.animations && gltf.animations.length > 0) {
+                            const mixer = new THREE.AnimationMixer(model);
+                            const animations = [];
+                            
+                            gltf.animations.forEach((clip, i) => {
+                                const action = mixer.clipAction(clip);
+                                animations.push(action);
+                                console.log(`🎬 Animation ${i}: ${clip.name}, Dauer: ${clip.duration.toFixed(2)}s`);
+                            });
+                            
+                            const animatedModel = {
+                                model: model,
+                                mixer: mixer,
+                                animations: animations,
+                                config: config,
+                                isPlaying: false,
+                                lastRestart: Date.now()
+                            };
+                            
+                            this.animatedModels.set(name, animatedModel);
+                            this.mixers.push(mixer);
+                            
+                            if (config.autoPlay) {
+                                this.playAnimatedModel(name);
+                            }
+                        } else {
+                            const animatedModel = {
+                                model: model,
+                                mixer: null,
+                                animations: [],
+                                config: config,
+                                isPlaying: false,
+                                lastRestart: Date.now()
+                            };
+                            this.animatedModels.set(name, animatedModel);
+                        }
+                        
+                        this.scene.add(model);
+                        console.log('🚗 Model zur Szene hinzugefügt:', name);
+                    },
+                    (progress) => {
+                        console.log(`⏳ Loading ${name}: ${Math.round((progress.loaded / progress.total) * 100)}%`);
+                    },
+                    (error) => {
+                        console.error(`❌ Error loading animated GLTF ${name}:`, error);
+                    }
+                );
+            }
+            
+            playAnimatedModel(name) {
+                const modelData = this.animatedModels.get(name);
+                if (!modelData || !modelData.animations || modelData.animations.length === 0) {
+                    return;
+                }
+                
+                modelData.animations.forEach((action, i) => {
+                    try {
+                        action.reset();
+                        action.play();
+                    } catch (error) {
+                        console.error(`❌ Fehler beim Starten von Animation ${i} in "${name}":`, error);
+                    }
+                });
+                
+                modelData.isPlaying = true;
+                modelData.lastRestart = Date.now();
+                console.log('🎬 Animation gestartet:', name);
+            }
+            
+            updateAnimations() {
+                const deltaTime = this.clock.getDelta();
+                
+                this.mixers.forEach((mixer, i) => {
+                    try {
+                        mixer.update(deltaTime);
+                    } catch (error) {
+                        console.error(`❌ Fehler beim Update von Mixer ${i}:`, error);
+                    }
+                });
+                
+                this.animatedModels.forEach((modelData, name) => {
+                    try {
+                        if (modelData.isPlaying && modelData.config.loopDuration > 0) {
+                            const elapsed = Date.now() - modelData.lastRestart;
+                            if (elapsed >= modelData.config.loopDuration) {
+                                this.playAnimatedModel(name);
+                            }
+                        }
+                    } catch (error) {
+                        console.error(`❌ Fehler beim Loop-Check für Model "${name}":`, error);
+                    }
+                });
+            }
+            
+            updateWeather(condition, temperature, precipitation) {
+                this.weatherData = { condition, temperature, precipitation };
+                
+                document.getElementById('weather-status').textContent = condition;
+                document.getElementById('temperature').textContent = temperature + '°C';
+                
+                if (condition === 'rain' || precipitation > 0) {
+                    this.particleSystem.visible = true;
+                    this.particleSystem.material.color.setHex(0x4682B4);
+                } else if (condition === 'snow') {
+                    this.particleSystem.visible = true;
+                    this.particleSystem.material.color.setHex(0xFFFFFF);
+                } else {
+                    this.particleSystem.visible = false;
+                }
+            }
+            
+            updateParticles() {
+                if (this.particleSystem && this.particleSystem.visible) {
+                    const positions = this.particleSystem.geometry.attributes.position.array;
+                    const velocities = this.particleSystem.geometry.attributes.velocity.array;
+                    
+                    for (let i = 0; i < positions.length; i += 3) {
+                        positions[i + 1] += velocities[i + 1];
+                        
+                        if (positions[i + 1] < 0) {
+                            positions[i + 1] = 20;
+                        }
+                    }
+                    
+                    this.particleSystem.geometry.attributes.position.needsUpdate = true;
+                }
+            }
+            
+            setupEventListeners() {
+                window.addEventListener('resize', () => {
+                    const aspect = window.innerWidth / window.innerHeight;
+                    const frustumSize = 10;
+                    this.camera.left = frustumSize * aspect / -2;
+                    this.camera.right = frustumSize * aspect / 2;
+                    this.camera.top = frustumSize / 2;
+                    this.camera.bottom = frustumSize / -2;
+                    this.camera.updateProjectionMatrix();
+                    
+                    this.renderer.setSize(window.innerWidth, window.innerHeight);
+                    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio * 1.25, 3.0));
+                    
+                    if (this.composer) {
+                        this.composer.setSize(window.innerWidth, window.innerHeight);
+                    }
+                });
+            }
+            
+            startDataUpdates() {
+                // Update sun data daily
+                setInterval(() => {
+                    this.loadSunData();
+                }, 24 * 60 * 60 * 1000);
+                
+                // Update weather every 15 minutes
+                setInterval(() => {
+                    this.loadWeatherData();
+                }, 15 * 60 * 1000);
+                
+                // Update UI every minute
+                setInterval(() => {
+                    this.updateUI();
+                    this.updateTimeDisplay();
+                }, 60 * 1000);
+            }
+            
+            animate() {
+                requestAnimationFrame(() => {
+                    this.animate();
+                });
+                
+                if (this.mixers.length > 0) {
+                    this.updateAnimations();
+                }
+                
+                if (this.timeControls.liveMode) {
+                    this.updateSunPosition();
+                    this.updateTimeDisplay();
+                }
+                
+                this.updateParticles();
+                
+                // Always use post-processing
+                this.composer.render();
+            }
+        }
+        
+        // Initialize the application
+        console.log('🚀 Starte vereinfachte Weather Landscape...');
+        
+        setTimeout(() => {
+            try {
+                const app = new WeatherLandscape();
+                window.app = app;
+                
+                // Load GLTF models
+                app.loadGLTFModel('models/Main_Geo_01.gltf');
+                app.loadAnimatedGLTF('models/Car_Animated_01.gltf', 'car', {
+                    loopDuration: 2000000,
+                    autoPlay: true
+                });
+                
+                console.log('✅ Weather Landscape erfolgreich gestartet!');
+                console.log('🎛️ Nur Zeit-Steuerung verfügbar - alle anderen Werte sind optimiert');
+                
+            } catch (error) {
+                console.error('❌ Kritischer Fehler beim Starten:', error);
+                
+                const loadingDiv = document.getElementById('loading');
+                if (loadingDiv) {
+                    loadingDiv.innerHTML = '<h3>❌ Fehler beim Laden</h3><div>Prüfe die Browser-Konsole für Details</div>';
+                }
+            }
+        }, 100);
+    </script>
+</body>
+</html>
